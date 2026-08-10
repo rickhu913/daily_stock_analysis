@@ -198,6 +198,46 @@ def _symbol_scope_lookup_values(code: str, market: str) -> List[str]:
         add_case_variants(f"{normalized}.SS")
     return values
 
+def _select_portfolio_context_for_code(
+    portfolio_context: Optional[Dict[str, Any]], code: str
+) -> Optional[Dict[str, Any]]:
+    """Select and normalize the manual portfolio record for one security."""
+    if not isinstance(portfolio_context, dict):
+        return None
+    positions = portfolio_context.get("positions")
+    if not isinstance(positions, list):
+        return None
+
+    target_code = str(code).strip()
+    for item in positions:
+        if not isinstance(item, dict) or str(item.get("code", "")).strip() != target_code:
+            continue
+        selected = dict(item)
+        selected["symbol"] = target_code
+        selected["quantity"] = selected.get("total_shares", selected.get("shares"))
+
+        core_shares = selected.get("core_shares")
+        t_shares = selected.get("t_shares")
+        core_cost = selected.get("core_cost")
+        t_buy_price = selected.get("t_buy_price")
+        if all(isinstance(value, (int, float)) for value in (core_shares, t_shares, core_cost, t_buy_price)):
+            total_shares = core_shares + t_shares
+            if total_shares:
+                selected["avg_cost"] = round(
+                    (core_shares * core_cost + t_shares * t_buy_price) / total_shares,
+                    4,
+                )
+                selected["cost_method"] = "估算合并成本，须以券商显示为准"
+        elif selected.get("cost") is not None:
+            selected["avg_cost"] = selected["cost"]
+            selected["cost_method"] = "用户提供成本"
+
+        rules = portfolio_context.get("portfolio_rules")
+        if isinstance(rules, list):
+            selected["portfolio_rules"] = [str(rule) for rule in rules if str(rule).strip()]
+        return selected
+    return None
+
 
 class StockAnalysisPipeline:
     """
@@ -434,6 +474,7 @@ class StockAnalysisPipeline:
             portfolio_context = getattr(self, "portfolio_context", None)
             if not isinstance(portfolio_context, dict):
                 portfolio_context = None
+            portfolio_context = _select_portfolio_context_for_code(portfolio_context, code)
             market = get_market_for_stock(normalize_stock_code(code))
             market_phase_context = build_market_phase_context(
                 market=market,
