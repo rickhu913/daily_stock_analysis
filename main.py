@@ -715,6 +715,22 @@ def _run_auto_backtest(config: Config) -> None:
         logger.warning(f"自动回测失败（已忽略）: {exc}")
 
 
+def _load_portfolio_context_from_env() -> Optional[Dict[str, Any]]:
+    """Load optional manual portfolio context from a JSON environment variable."""
+    raw_value = os.getenv("PORTFOLIO_CONTEXT_JSON", "").strip()
+    if not raw_value:
+        return None
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        logger.warning("PORTFOLIO_CONTEXT_JSON is invalid JSON; ignoring it: %s", exc)
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning("PORTFOLIO_CONTEXT_JSON must be a JSON object; ignoring it")
+        return None
+    return parsed
+
+
 def run_full_analysis(
     config: Config,
     args: argparse.Namespace,
@@ -826,10 +842,12 @@ def run_full_analysis(
         market_context_summary = ""
         market_context_full_report = ""
         market_context_generated_during_stock = False
+        portfolio_context = _load_portfolio_context_from_env()
         pipeline = StockAnalysisPipeline(
             config=config,
             max_workers=args.workers,
             query_id=query_id,
+            portfolio_context=portfolio_context,
             query_source="cli",
             save_context_snapshot=save_context_snapshot,
             daily_market_context_enabled=should_use_daily_market_context,
