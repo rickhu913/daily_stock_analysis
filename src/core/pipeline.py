@@ -799,6 +799,38 @@ class StockAnalysisPipeline:
                     stream_progress_callback=_on_llm_stream,
                     analysis_context_pack_summary=analysis_context_pack_summary,
                 )
+                retry_error = (
+                    str(getattr(result, "error_message", "") or "").lower()
+                    if result is not None
+                    else "empty result"
+                )
+                retryable_llm_failure = result is None or (
+                    not getattr(result, "success", True)
+                    and any(
+                        marker in retry_error
+                        for marker in (
+                            "empty response",
+                            "empty result",
+                            "not valid json",
+                            "all llm models failed",
+                        )
+                    )
+                )
+                if retryable_llm_failure:
+                    logger.warning(
+                        "%s(%s) LLM 输出为空或格式无效，2秒后自动重试一次",
+                        stock_name,
+                        code,
+                    )
+                    self._emit_progress(82, f"{stock_name}：模型输出异常，正在自动重试")
+                    time.sleep(2)
+                    result = self.analyzer.analyze(
+                        enhanced_context,
+                        news_context=news_context,
+                        progress_callback=self._emit_progress,
+                        stream_progress_callback=_on_llm_stream,
+                        analysis_context_pack_summary=analysis_context_pack_summary,
+                    )
                 llm_duration_ms = int((time.monotonic() - llm_started_at) * 1000)
                 record_llm_run(
                     success=bool(result and getattr(result, "success", True)),
