@@ -3764,6 +3764,26 @@ class GeminiAnalyzer:
             prompt += market_structure_section
         if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
             prompt += analysis_context_pack_summary
+        portfolio_context = context.get("portfolio_context")
+        if isinstance(portfolio_context, dict):
+            rules = portfolio_context.get("portfolio_rules")
+            rules_text = "；".join(str(rule) for rule in rules) if isinstance(rules, list) else ""
+            prompt += f"""
+
+## 💼 用户实际持仓（仅用于持仓者建议）
+| 项目 | 数据 |
+|------|------|
+| 持仓数量 | {portfolio_context.get('quantity', 'N/A')} |
+| 参考成本 | {portfolio_context.get('avg_cost', 'N/A')} |
+| 成本口径 | {portfolio_context.get('cost_method', 'N/A')} |
+| 核心仓数量 | {portfolio_context.get('core_shares', '无')} |
+| T仓数量 | {portfolio_context.get('t_shares', '无')} |
+| T仓买入价 | {portfolio_context.get('t_buy_price', '无')} |
+| 持仓备注 | {portfolio_context.get('note', '无')} |
+| 操作规则 | {rules_text or '无'} |
+
+请在“持仓者建议”中基于以上真实数量和成本作答；不要把估算成本说成券商确认成本。若讨论交易，必须说明目的、承接确认和失效条件；不得无条件建议卖出核心仓或补仓。
+"""
         prompt += f"""
 
 ## 📈 技术面数据
