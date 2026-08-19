@@ -901,6 +901,8 @@ class StockAnalysisPipeline:
                     result.fundamental_context = fundamental_context
                 if isinstance(market_structure_context, dict):
                     result.market_structure_context = market_structure_context
+                if isinstance(portfolio_context, dict):
+                    result.portfolio_context = dict(portfolio_context)
                 result.market_phase_summary = market_phase_summary
                 result.analysis_context_pack_overview = analysis_context_pack_overview
                 self._refresh_decision_action_for_final_result(
@@ -3294,8 +3296,39 @@ class StockAnalysisPipeline:
                 code = future_to_code[future]
                 try:
                     result = future.result()
-                    if result and result.success:
+                    if result is None and not dry_run:
+                        report_language = normalize_report_language(
+                            getattr(self.config, "report_language", "zh")
+                        )
+                        try:
+                            stock_name = self.fetcher_manager.get_stock_name(code) or f"股票{code}"
+                        except Exception:
+                            stock_name = f"股票{code}"
+                        result = AnalysisResult(
+                            code=code,
+                            name=stock_name,
+                            sentiment_score=50,
+                            trend_prediction=localize_trend_prediction("震荡", report_language),
+                            operation_advice=localize_operation_advice("观望", report_language),
+                            confidence_level=localize_confidence_level("低", report_language),
+                            analysis_summary="本次分析流程未完成，不生成买卖结论。",
+                            risk_warning="请稍后重试或人工核对。",
+                            success=False,
+                            error_message="analysis pipeline returned no result",
+                            report_language=report_language,
+                        )
+                        selected_portfolio = _select_portfolio_context_for_code(
+                            getattr(self, "portfolio_context", None),
+                            code,
+                        )
+                        if isinstance(selected_portfolio, dict):
+                            result.portfolio_context = selected_portfolio
+                    if result:
+                        # Keep failed LLM results in the report so configured symbols never
+                        # disappear silently. The notifier renders them as unavailable and
+                        # does not turn them into a trading recommendation.
                         results.append(result)
+                    if result and result.success:
                         if single_stock_notify and send_notification and not dry_run:
                             self._send_single_stock_notification(
                                 result,
@@ -3338,7 +3371,7 @@ class StockAnalysisPipeline:
             )
             fail_count = len(stock_codes) - success_count
         else:
-            success_count = len(results)
+            success_count = sum(1 for result in results if getattr(result, "success", True))
             fail_count = len(stock_codes) - success_count
         
         logger.info("===== 分析完成 =====")

@@ -1737,6 +1737,7 @@ class AnalysisResult:
     # ========== 基本面上下文（仅运行时，用于通知拼装；不持久化到 to_dict）==========
     fundamental_context: Optional[Dict[str, Any]] = None
     market_structure_context: Optional[Dict[str, Any]] = None
+    portfolio_context: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""

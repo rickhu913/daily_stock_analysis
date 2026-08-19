@@ -1223,6 +1223,49 @@ class NotificationService(
             signal_tag,
         )
 
+    def _append_portfolio_context(
+        self,
+        report_lines: List[str],
+        result: AnalysisResult,
+        report_language: str,
+    ) -> None:
+        """Render the user's real position deterministically instead of relying on LLM prose."""
+        portfolio = getattr(result, "portfolio_context", None)
+        if not isinstance(portfolio, dict):
+            return
+
+        quantity = portfolio.get("quantity")
+        avg_cost = portfolio.get("avg_cost")
+        if quantity is None and avg_cost is None:
+            return
+
+        if isinstance(quantity, (int, float)) and not isinstance(quantity, bool):
+            quantity_text = f"{int(quantity):,} shares" if report_language == "en" else f"{int(quantity):,}股"
+        else:
+            quantity_text = str(quantity or "N/A")
+        cost_text = str(avg_cost if avg_cost is not None else "N/A")
+        method_text = str(portfolio.get("cost_method") or "-")
+        note_text = str(portfolio.get("note") or "").strip()
+
+        localized = {
+            "en": ("My Position", "Quantity", "Reference Cost", "Cost Basis", "Note"),
+            "ko": ("내 실제 보유", "보유 수량", "참고 단가", "단가 기준", "보유 메모"),
+        }.get(
+            report_language,
+            ("我的实际持仓", "持仓数量", "参考成本", "成本口径", "持仓备注"),
+        )
+        heading, quantity_label, cost_label, method_label, note_label = localized
+        report_lines.extend([
+            f"### 💼 {heading}",
+            "",
+            f"| {quantity_label} | {cost_label} | {method_label} |",
+            "|---------|---------|---------|",
+            f"| **{quantity_text}** | **{cost_text}** | {method_text} |",
+            "",
+        ])
+        if note_text:
+            report_lines.extend([f"**{note_label}**: {note_text}", ""])
+
     def generate_dashboard_report(
         self,
         results: List[AnalysisResult],
@@ -1278,13 +1321,19 @@ class NotificationService(
         # 按评分排序（高分在前）
         sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
 
-        buy_count, sell_count, hold_count = self._count_display_decisions(results, report_language)
+        successful_results = [r for r in results if getattr(r, "success", True)]
+        failed_count = len(results) - len(successful_results)
+        buy_count, sell_count, hold_count = self._count_display_decisions(
+            successful_results,
+            report_language,
+        )
 
         report_lines = [
             f"# 🎯 {report_date} {labels['dashboard_title']}",
             "",
             f"> {labels['analyzed_prefix']} **{len(results)}** {labels['stock_unit']} | "
-            f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count}",
+            f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count}"
+            + (f" ⚠️{_nlabel('Incomplete', '未完成', '미완료')}:{failed_count}" if failed_count else ""),
         ]
         self._append_market_status_line(report_lines, results, report_language)
 
@@ -1295,6 +1344,14 @@ class NotificationService(
                 "",
             ])
             for r in sorted_results:
+                if not getattr(r, "success", True):
+                    display_name = self._get_display_name(r, report_language)
+                    report_lines.append(
+                        f"⚠️ **{display_name}({r.code})**: "
+                        f"{_nlabel('AI analysis incomplete', '本次AI分析未完成', 'AI 분석 미완료')} | "
+                        f"{_nlabel('Position and quote retained', '已保留持仓与行情信息', '보유 및 시세 정보 유지')}"
+                    )
+                    continue
                 signal_text, signal_emoji, _ = self._get_signal_level(r)
                 display_name = self._get_display_name(r, report_language)
                 report_lines.append(
@@ -1322,6 +1379,17 @@ class NotificationService(
                     f"## {signal_emoji} {stock_name} ({result.code})",
                     "",
                 ])
+                if not getattr(result, "success", True):
+                    report_lines.extend([
+                        f"### ⚠️ {_nlabel('AI analysis incomplete', '本次AI分析未完成', 'AI 분석 미완료')}",
+                        "",
+                        f"> {_nlabel('Quote data was fetched, but the model repeatedly returned empty or invalid content; no trading conclusion is generated.', '行情数据已获取，但模型连续返回空内容或无效内容；本次不生成买卖结论。', '시세 데이터는 수집했지만 모델이 빈 내용 또는 잘못된 내용을 반복 반환했으며, 매매 결론은 생성하지 않습니다.')}",
+                        "",
+                    ])
+                    self._append_portfolio_context(report_lines, result, report_language)
+                    self._append_market_snapshot(report_lines, result)
+                    report_lines.extend(["---", ""])
+                    continue
                 # ========== 舆情与基本面概览（放在最前面）==========
                 intel = dashboard.get('intelligence', {}) if dashboard else {}
                 if intel:
@@ -1371,6 +1439,7 @@ class NotificationService(
                     f"⏰ **{labels['time_sensitivity_label']}**: {time_sense}",
                     "",
                 ])
+                self._append_portfolio_context(report_lines, result, report_language)
                 # 持仓分类建议
                 if pos_advice:
                     report_lines.extend([
@@ -1931,6 +2000,28 @@ class NotificationService(
             f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
             "",
         ]
+
+        if not getattr(result, "success", True):
+            failure_heading = {
+                "en": "AI analysis incomplete",
+                "ko": "AI 분석 미완료",
+            }.get(report_language, "本次AI分析未完成")
+            failure_message = {
+                "en": "Quote data was fetched, but the model returned empty or invalid content; no trading conclusion is generated.",
+                "ko": "시세 데이터는 수집했지만 모델이 빈 내용 또는 잘못된 내용을 반환했으며, 매매 결론은 생성하지 않습니다.",
+            }.get(report_language, "行情数据已获取，但模型返回空内容或无效内容；本次不生成买卖结论。")
+            lines.extend([
+                f"### ⚠️ {failure_heading}",
+                "",
+                f"> {failure_message}",
+                "",
+            ])
+            self._append_portfolio_context(lines, result, report_language)
+            self._append_market_snapshot(lines, result)
+            lines.append("---")
+            return "\n".join(lines)
+
+        self._append_portfolio_context(lines, result, report_language)
 
         excerpt = self._public_phase_pack_excerpt(result, report_language)
         if excerpt:

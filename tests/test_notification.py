@@ -845,6 +845,51 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertIn("600519", out)
 
     @mock.patch("src.notification.get_config")
+    def test_dashboard_keeps_failed_symbol_and_renders_runtime_portfolio(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        held = AnalysisResult(
+            code="159140",
+            name="科创创业人工智能ETF易方达",
+            sentiment_score=50,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            analysis_summary="等待确认",
+            portfolio_context={
+                "quantity": 59000,
+                "avg_cost": 1.3941,
+                "cost_method": "估算合并成本，须以券商显示为准",
+            },
+        )
+        failed = AnalysisResult(
+            code="159819",
+            name="人工智能ETF易方达",
+            sentiment_score=50,
+            trend_prediction="震荡",
+            operation_advice="持有",
+            success=False,
+            error_message="LLM returned empty response",
+            portfolio_context={
+                "quantity": 43800,
+                "avg_cost": 1.8888,
+                "cost_method": "用户提供成本",
+            },
+        )
+
+        out = service.generate_dashboard_report([held, failed], report_date="2026-08-19")
+
+        self.assertIn("共分析 **2**", out)
+        self.assertIn("⚠️未完成:1", out)
+        self.assertIn("**59,000股**", out)
+        self.assertIn("**1.3941**", out)
+        self.assertIn("159819", out)
+        self.assertIn("本次AI分析未完成", out)
+        self.assertIn("**43,800股**", out)
+        self.assertNotIn("本次AI分析未完成 | 评分", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_brief_report_shows_model_by_default(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False)
         service = NotificationService()
